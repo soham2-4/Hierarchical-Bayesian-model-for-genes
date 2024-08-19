@@ -12,7 +12,7 @@
 <br />
 <div align="center">
   
-<h3 align="center"Computational approach for decoding Malaria Drug targets from Single-Cell Transcriptomics and finding potential drug molecules</h3>
+<h3 align="center"Unraveling the Impact of Gene Length on Kinetic Parameters: Implications in Drug Target selection</h3>
 
  
 </div>
