@@ -4,9 +4,9 @@
 ***Flowchart of the pipeline of our whole work** <!-- Add your description -->
 
 
-![Project Image](images/MI.png) <!-- Add this line with the correct path -->
+ <!--![Project Image](images/MI.png)--> <!-- Add this line with the correct path -->
 
-***Pipeline of the mutual information-based feature reduction technique** <!-- Add your description -->
+<!--***Pipeline of the mutual information-based feature reduction technique**--> <!-- Add your description -->
 
 
 <br />
