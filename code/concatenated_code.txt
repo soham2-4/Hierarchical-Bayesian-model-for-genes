@@ -1,0 +1,396 @@
+
+
+// File : run_poisson_beta.py
+from poisson_beta.poisson_beta import PoissonBeta
+
+if __name__ == "__main__":
+    input_file = "data/test.txt"
+    output_file = "result.txt"
+    num_iterations = 10000
+
+    pb = PoissonBeta(input_file, output_file, num_iterations)
+    pb.run()
+// File: poisson_beta_size_factor.py
+import numpy as np
+from scipy.stats import gmean
+
+
+def poisson_beta_size_factor(read_count):
+    nonzero_gene = np.sum(np.log(read_count), axis=1) != -np.inf
+    print(nonzero_gene)
+    # normalized_read_count = read_count[nonzero_gene] / gmean(read_count[nonzero_gene], axis=0)
+    normalized_read_count = read_count[nonzero_gene]
+    row_gmean = gmean(normalized_read_count, axis=1)
+    row_gmean_reshaped = row_gmean.reshape(-1, 1)
+    print(row_gmean_reshaped)
+    # divide each entry by the geometric mean of it's row
+    normalized_read_count = normalized_read_count / row_gmean_reshaped
+    print(normalized_read_count)
+    size_factor = np.zeros(read_count.shape[1])
+    for j in range(read_count.shape[1]):
+        size_factor[j] = np.median(normalized_read_count[normalized_read_count[:, j] != 0, j])
+    print(size_factor)
+    return size_factor
+
+
+// File: poisson_beta_update_si.py
+import numpy as np
+from .poisson_beta_slice_sample import slice_sample_gamma
+
+def poisson_beta_update_si(sum_count, a_param, c_param):
+    num_gene = c_param["num_gene"]
+    for i in range(num_gene):
+        def logdist(x):
+            sum_pij = np.sum(a_param["size_factor"][i] * (c_param["pij"][i] - 1))
+            sum_x = sum_count[i]
+            return (
+                -x / a_param["beta_si"][i] +
+                (a_param["alpha_si"][i] - 1) * np.log(x) +
+                sum_x * np.log(x) +
+                x * sum_pij
+            )
+        c_param["si"][i] = slice_sample_gamma(logdist, c_param["si"][i], c_param["si"][i] / 2)
+    return c_param["si"]
+
+// File: poisson_beta_update_koni.py
+import numpy as np
+from .poisson_beta_slice_sample import slice_sample_gamma
+from scipy.special import gammaln
+from math import lgamma
+
+def poisson_beta_update_koni(a_param, c_param):
+    num_gene = c_param["num_gene"]
+    for i in range(num_gene):
+        def logdist(x):
+            return (
+                -x / a_param["beta_koni"][i] +
+                (a_param["alpha_koni"][i] - 1) * np.log(x) +
+                np.sum(
+                    lgamma(x + c_param["koffi"][i]) - lgamma(x) +
+                    (x - 1) * np.log(1 - c_param["pij"][i])
+                )
+            )
+        c_param["koni"][i] = slice_sample_gamma(logdist, c_param["koni"][i], c_param["koni"][i] / 2)
+    return c_param["koni"]
+
+
+// File: poisson_beta_log_posterior.py
+import numpy as np
+from scipy.special import gammaln
+
+def poisson_beta_log_posterior(read_count, a_param, c_param):
+    log_posterior = (
+        np.sum(read_count * (np.log(c_param["si"])[:, np.newaxis] + np.log(1 - c_param["pij"]))) +
+        a_param["ln_size_factor_sum"] +
+        np.sum(a_param["size_factor"] * (c_param["si"][:, np.newaxis] * (c_param["pij"] - 1))) -
+        a_param["count_data_gammaln"]
+    )
+
+    log_posterior += np.sum(
+        gammaln(c_param["koni"][:, np.newaxis] + c_param["koffi"][:, np.newaxis]) -
+        gammaln(c_param["koni"][:, np.newaxis]) -
+        gammaln(c_param["koffi"][:, np.newaxis]) +
+        (c_param["koffi"][:, np.newaxis] - 1) * np.log(c_param["pij"]) +
+        (c_param["koni"][:, np.newaxis] - 1) * np.log(1 - c_param["pij"])
+    )
+
+    log_posterior += np.sum(
+        -c_param["si"] / a_param["beta_si"] +
+        (a_param["alpha_si"] - 1) * np.log(c_param["si"]) -
+        a_param["alpha_si"] * np.log(a_param["beta_si"]) -
+        gammaln(a_param["alpha_si"])
+    )
+
+    log_posterior += np.sum(
+        -c_param["koni"] / a_param["beta_koni"] +
+        (a_param["alpha_koni"] - 1) * np.log(c_param["koni"]) -
+        a_param["alpha_koni"] * np.log(a_param["beta_koni"]) -
+        gammaln(a_param["alpha_koni"])
+    )
+
+    log_posterior += np.sum(
+        -c_param["koffi"] / a_param["beta_koffi"] +
+        (a_param["alpha_koffi"] - 1) * np.log(c_param["koffi"]) -
+        a_param["alpha_koffi"] * np.log(a_param["beta_koffi"]) -
+        gammaln(a_param["alpha_koffi"])
+    )
+
+    return log_posterior
+
+// File: poisson_beta_init.py
+import numpy as np
+from scipy.special import gammaln
+
+def poisson_beta_init(read_count, size_factor, transcript_length, num_gene, num_cell):
+    a_param = {
+        "size_factor": np.outer(transcript_length, size_factor),
+        "alpha_si": np.ones(num_gene),
+        "beta_si": np.max(read_count / np.outer(transcript_length, size_factor), axis=1),
+        "alpha_koni": np.ones(num_gene),
+        "beta_koni": 100 * np.ones(num_gene),
+        "alpha_koffi": np.ones(num_gene),
+        "beta_koffi": 100 * np.ones(num_gene),
+        "count_data_gammaln": gammaln(read_count + 1).sum(),
+        "count_data_row_gammaln": gammaln(read_count + 1).sum(axis=1),
+        "ln_size_factor": np.log(np.outer(transcript_length, size_factor)),
+        "ln_size_factor_sum": (read_count * np.log(np.outer(transcript_length, size_factor))).sum(),
+        "count_ln_size_factor": (read_count * np.log(np.outer(transcript_length, size_factor))).sum(axis=1)
+    }
+
+    c_param = {
+        "num_gene": num_gene,
+        "num_cell": num_cell,
+        "si": np.mean(read_count / a_param["size_factor"]) * np.ones(num_gene),
+        "koni": np.random.rand(num_gene),
+        "koffi": np.random.rand(num_gene),
+        "pij": 0.5 * np.ones((num_gene, num_cell))
+    }
+
+    for i in range(num_gene):
+        x = read_count[i]
+        e1 = np.mean(x)
+        e2 = np.sum(x * (x - 1)) / x.size
+        e3 = np.sum(x * (x - 1) * (x - 2)) / x.size
+        print("The value of x is:", x)
+        print("The value of e1, e2, e3 is:", e1, e2, e3)
+        try:
+            r1, r2, r3 = e1, e2 / e1, e3 / e2
+        except:
+            print("ZeroDivisionError encountered. The value of x is:", x)
+            print("The value of e1, e2, e3 is:", e1, e2, e3)
+            print("The value of read count is", read_count)
+        kon_hat = 2 * r1 * (r3 - r2) / (r1 * r2 - 2 * r1 * r3 + r2 * r3)
+        koff_hat = 2 * (r2 - r1) * (r1 - r3) * (r3 - r2) / ((r1 * r2 - 2 * r1 * r3 + r2 * r3) * (r1 - 2 * r2 + r3))
+        s_hat = (-r1 * r2 + 2 * r1 * r3 - r2 * r3) / (r1 - 2 * r2 + r3)
+        s_hat /= (transcript_length[i] * np.mean(size_factor))
+        print("the value of konhat, koffhat, and shat is", kon_hat, koff_hat, s_hat)
+        if s_hat > 0 and kon_hat > 0 and koff_hat > 0:
+            print("entering if condition")
+            c_param["si"][i] = s_hat
+            c_param["koni"][i] = kon_hat
+            c_param["koffi"][i] = koff_hat
+    return c_param, a_param
+
+// File: concatenate.py
+import os
+
+# Set the directory path
+directory = "."
+
+# Set the output file name
+output_file = "concatenated_code.txt"
+
+# Get a list of all files in the directory
+files = os.listdir(directory)
+
+# Open the output file in write mode
+with open(output_file, "w", encoding="utf-8") as output:
+    # Iterate over each file in the directory
+    for file in files:
+        # Get the full file path
+        file_path = os.path.join(directory, file)
+        
+        # Check if the file is a regular file (not a directory)
+        if os.path.isfile(file_path):
+            try:
+                # Open the file in read mode with UTF-8 encoding
+                with open(file_path, "r", encoding="utf-8") as f:
+                    # Write the file name as a comment
+                    output.write(f"// File: {file}\n")
+                    
+                    # Write the file content
+                    output.write(f.read())
+                    
+                    # Add a newline separator
+                    output.write("\n\n")
+            except UnicodeDecodeError:
+                print(f"Skipping file '{file}' due to encoding error.")
+
+print("Concatenation complete. Output file:", output_file)
+
+// File: __init__.py
+from .poisson_beta import PoissonBeta
+
+// File: poisson_beta_update_koffi.py
+import numpy as np
+from .poisson_beta_slice_sample import slice_sample_gamma
+from math import lgamma
+from scipy.special import gammaln
+
+def poisson_beta_update_koffi(a_param, c_param):
+    num_gene = c_param["num_gene"]
+    for i in range(num_gene):
+        def logdist(x):
+            return (
+                -x / a_param["beta_koffi"][i] +
+                (a_param["alpha_koffi"][i] - 1) * np.log(x) +
+                np.sum(
+                    lgamma(x + c_param["koni"][i]) -
+                    lgamma(x) +
+                    (x - 1) * np.log(c_param["pij"][i])
+                )
+            )
+        c_param["koffi"][i] = slice_sample_gamma(logdist, c_param["koffi"][i], c_param["koffi"][i] / 2)
+    return c_param["koffi"]
+
+// File: poisson_beta_slice_sample.py
+import numpy as np
+
+def slice_sample_beta(logdist, xx, widths, max_step_size=1000):
+    log_px = logdist(xx)
+    log_uprime = np.log(np.random.rand()) + log_px
+
+    rr = np.random.rand()
+    x_l = xx - rr * widths
+    x_r = xx + (1 - rr) * widths
+
+    j = np.floor(np.random.rand() * max_step_size)
+    k = max_step_size - 1 - j
+
+    while logdist(x_l) > log_uprime and x_l - widths >= 0 and j > 0:
+        x_l -= widths
+        j -= 1
+
+    while logdist(x_r) > log_uprime and x_r + widths <= 1 and k > 0:
+        x_r += widths
+        k -= 1
+
+    x_l = max(x_l, 0)
+    x_r = min(x_r, 1)
+
+    while True:
+        xprime = np.random.rand() * (x_r - x_l) + x_l
+        log_px = logdist(xprime)
+        if log_px > log_uprime:
+            return xprime
+        else:
+            if xprime > xx:
+                x_r = xprime
+            elif xprime < xx:
+                x_l = xprime
+            else:
+                raise ValueError("Shrunk to current position and still not acceptable.")
+
+def slice_sample_gamma(logdist, xx, widths, max_step_size=1000):
+    log_px = logdist(xx)
+    log_uprime = np.log(np.random.rand()) + log_px
+
+    rr = np.random.rand()
+    x_l = xx - rr * widths
+    x_r = xx + (1 - rr) * widths
+
+    j = np.floor(np.random.rand() * max_step_size)
+    k = max_step_size - 1 - j
+
+    while logdist(x_l) > log_uprime and x_l - widths >= 0 and j > 0:
+        x_l -= widths
+        j -= 1
+
+    while logdist(x_r) > log_uprime and k > 0:
+        x_r += widths
+        k -= 1
+
+    while True:
+        xprime = np.random.rand() * (x_r - x_l) + x_l
+        log_px = logdist(xprime)
+        if log_px > log_uprime:
+            return xprime
+        else:
+            if xprime > xx:
+                x_r = xprime
+            elif xprime < xx:
+                x_l = xprime
+            else:
+                raise ValueError("Shrunk to current position and still not acceptable.")
+
+// File: poisson_beta.py
+import numpy as np
+import pandas as pd
+from .poisson_beta_init import poisson_beta_init
+from .poisson_beta_size_factor import poisson_beta_size_factor
+from .poisson_beta_update_pij import poisson_beta_update_pij
+from .poisson_beta_update_si import poisson_beta_update_si
+from .poisson_beta_update_koni import poisson_beta_update_koni
+from .poisson_beta_update_koffi import poisson_beta_update_koffi
+from .poisson_beta_log_posterior import poisson_beta_log_posterior
+
+class PoissonBeta:
+    def __init__(self, input_file, output_file, num_iterations):
+        self.input_file = input_file
+        self.output_file = output_file
+        self.num_iterations = num_iterations
+
+    def run(self):
+        # Read input data
+        data = np.genfromtxt(self.input_file, delimiter="\t", skip_header=1, dtype=None, encoding=None, unpack=True)
+        # convert to dataframe (handle last column which has true and false)
+        gene_names = data[0].astype(str)
+        transcript_length = data[1].astype(float)
+        read_count = data[2:]
+        array_2d = np.array(read_count)
+        transposed_array = array_2d.T
+        read_count = transposed_array
+        #only take those rows where atleast one value is non zero
+        expressed_index = np.sum(read_count, axis=1) != 0 
+        read_count_expressed = read_count[expressed_index]
+
+        # Initialize model parameters
+        size_factor = poisson_beta_size_factor(read_count_expressed)
+        num_gene, num_cell = read_count_expressed.shape
+        c_param, a_param = poisson_beta_init(read_count_expressed, size_factor, transcript_length[expressed_index], num_gene, num_cell)
+
+        # Run Gibbs sampling
+        burn_in = self.num_iterations // 2
+        samples_pij = np.zeros((num_gene, num_cell))
+        samples_si = np.zeros((num_gene, self.num_iterations - burn_in))
+        samples_koni = np.zeros((num_gene, self.num_iterations - burn_in))
+        samples_koffi = np.zeros((num_gene, self.num_iterations - burn_in))
+        log_posterior = np.zeros(self.num_iterations)
+
+        for t in range(self.num_iterations):
+            c_param["pij"] = poisson_beta_update_pij(read_count_expressed, c_param, a_param)
+            c_param["si"] = poisson_beta_update_si(read_count_expressed.sum(axis=1), a_param, c_param)
+            c_param["koni"] = poisson_beta_update_koni(a_param, c_param)
+            c_param["koffi"] = poisson_beta_update_koffi(a_param, c_param)
+            log_posterior[t] = poisson_beta_log_posterior(read_count_expressed, a_param, c_param)
+            print(f"Poisson Beta Gibbs Sampling Iteration\t {t+1}/{self.num_iterations}\t {log_posterior[t]}")
+
+            if t >= burn_in:
+                samples_pij += c_param["pij"]
+                samples_si[:, t - burn_in] = c_param["si"]
+                samples_koni[:, t - burn_in] = c_param["koni"]
+                samples_koffi[:, t - burn_in] = c_param["koffi"]
+
+        samples_pij /= (self.num_iterations - burn_in)
+
+        # Write output
+        with open(self.output_file, "w") as f:
+            f.write("Gene\tSi\tKoni\tKoffi\tSKoffi\tExi\t")
+            f.write("\t".join(f"Pij(Cell{j+1})" for j in range(num_cell)))
+            f.write("\n")
+
+            for i in range(num_gene):
+                f.write(f"{gene_names[i]}\t{samples_si[i].mean()}\t{samples_koni[i].mean()}\t{samples_koffi[i].mean()}\t")
+                f.write(f"{samples_si[i].mean() / samples_koffi[i].mean()}\t")
+                f.write(f"{samples_si[i].mean() * (samples_koni[i].mean() / (samples_koffi[i].mean() + samples_koni[i].mean()))}\t")
+                f.write("\t".join(str(samples_pij[i, j]) for j in range(num_cell)))
+                f.write("\n")
+
+// File: poisson_beta_update_pij.py
+import numpy as np
+from .poisson_beta_slice_sample import slice_sample_beta
+
+def poisson_beta_update_pij(read_count, c_param, a_param):
+    num_gene, num_cell = read_count.shape
+    for i in range(num_gene):
+        for j in range(num_cell):
+            def logdist(x):
+                return (
+                    (c_param["koffi"][i] - 1) * np.log(x) +
+                    (c_param["koni"][i] - 1) * np.log(1 - x) +
+                    np.log(1 - x) * read_count[i, j] +
+                    a_param["size_factor"][i, j] * (c_param["si"][i] * (x - 1))
+                )
+            c_param["pij"][i, j] = slice_sample_beta(logdist, c_param["pij"][i, j], c_param["pij"][i, j] / 2)
+    return c_param["pij"]
+
