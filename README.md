@@ -1,5 +1,5 @@
 # Unraveling the Impact of Gene Length on Kinetic Parameters: Implications in Drug Target selection
-![Project Image](images/flowchat.png) <!-- Add this line with the correct path -->
+![Project Image](images/baysein.png) <!-- Add this line with the correct path -->
 
 ***Flowchart of the pipeline of our whole work** <!-- Add your description -->
 
