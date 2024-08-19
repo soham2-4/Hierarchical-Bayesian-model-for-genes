@@ -83,7 +83,7 @@ These are the steps to follow and run this project:
 
 1. Clone the repo
    ```sh
-   git clone https://github.com/soham2-4/Malaria-Drug-Targets-finding-from-Single-Cell-Transcriptomics-and-genertaing-potential-drug-molecule.git
+   git clone https:https://github.com/soham2-4/Hierarchical-Bayesian-model-for-genes.git
    ```
 2. Install pip packages
    ```sh
