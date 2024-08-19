@@ -91,12 +91,8 @@ These are the steps to follow and run this project:
    ```
 3. Run python files in code folder
    ```sh
-   python without_featureselection.py (get classification result without feature selection)
-   python MI_feature_reduction.py (get classification result with feature selection)
-   python random_feature.py (get classification result with random feature selection)
-   classification_results.ipynb (get bar chats of classification accuracies)
-   UMAP.ipynb (get UMAP of datasets before feature selection and after feature selection)
-   enrichment.ipynb (bar charts of enriched biological functions)
+   python run_poisson_beta.py (get the result txt)
+  
    ```
 
   
